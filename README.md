@@ -13,3 +13,29 @@ This project is a ETL pipeline that:
 ![alt text](https://github.com/huynhdoanho/NYC-taxi-Airflow-Spark-Docker/blob/8155ab405139db559083a1dcac32379cc4cc3f5f/imgs/overview.png)
 # Airflow dags:
 ![alt text](https://github.com/huynhdoanho/NYC-taxi-Airflow-Spark-Docker/blob/8155ab405139db559083a1dcac32379cc4cc3f5f/imgs/dag.png)
+# How to run ?
+1. Clone this project
+```
+git clone https://github.com/huynhdoanho/NYC-taxi-Airflow-Spark-Docker
+```
+2. Build
+```
+docker compose build
+```
+3. Run
+```
+docker compose up -d
+```
+
+4. Go to  <b>localhost:8080</b>  to check Airflow dags
+
+5. You can also check PostgreSQL after finish the Airflow dags
+- Port: 5434
+- Database: airflow
+- User: postgres
+- Password: postgres
+
+6. Stop
+```
+docker compose down
+```
