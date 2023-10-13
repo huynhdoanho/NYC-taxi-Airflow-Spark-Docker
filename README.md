@@ -29,13 +29,17 @@ docker compose up -d
 
 4. Go to  <b>localhost:8080</b>  to check Airflow dags
 
-5. You can also check PostgreSQL after finish the Airflow dags
+5. To check Minio:  <b> localhost:9001 </b>
+- User: admin
+- Password: admin123
+
+6. You can also check PostgreSQL after finish the Airflow dags
 - Port: 5434
 - Database: airflow
 - User: postgres
 - Password: postgres
 
-6. Stop
+7. Stop
 ```
 docker compose down
 ```
