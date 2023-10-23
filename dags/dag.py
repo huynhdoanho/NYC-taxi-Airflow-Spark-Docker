@@ -1,6 +1,8 @@
 import datetime
 from datetime import timedelta
 import shapefile
+import geopandas
+import pyproj
 import airflow
 from airflow import DAG
 from airflow.operators.python_operator import PythonOperator
@@ -30,7 +32,7 @@ spark = SparkSession.builder.config(conf=conf).getOrCreate()
 
 
 current_time = datetime.datetime.now()
-current_month = '01'
+current_month = '07'
 current_year = current_time.year
 
 # MySQL config
@@ -108,9 +110,11 @@ def load_shape_file_to_minio():
             )
 
 
-def transform(**context):
+def transform():
 
-    df = spark.read.option("header", "true").parquet(f'/home/workdir/yellow_tripdata_{current_year}-{current_month}.parquet')
+    df = spark.read.\
+        option("header", "true").\
+        parquet(f'/home/workdir/yellow_tripdata_{current_year}-{current_month}.parquet')
 
     # not_time_stamp = df.columns
     # not_time_stamp.remove('tpep_pickup_datetime')
@@ -134,53 +138,91 @@ def transform(**context):
     df = df.withColumn("pickup_weekday", date_format(col("tpep_pickup_datetime"), "EEEE"))
     df = df.withColumn("dropoff_weekday", date_format(col("tpep_dropoff_datetime"), "EEEE"))
 
-    for col_name in df.columns:
-        df = df.withColumn(col_name, col(col_name).cast('string'))
+    # for col_name in df.columns:
+    #     df = df.withColumn(col_name, col(col_name).cast('string'))
 
     df.write\
         .option("header", "true")\
+        .option("inferSchema", "true")\
         .mode("overwrite")\
         .parquet(f'/home/workdir/yellow_tripdata_{current_year}-{current_month}_transformed.parquet')
 
 
-def create_location_file():
+def load_transform_data_to_minio():
 
+    client = Minio(
+        "minio:9000",
+        access_key="minio",
+        secret_key="minio123",
+        secure=False
+    )
+
+    bucket = "warehouse"
+
+    found = client.bucket_exists(bucket)
+    if not found:
+        client.make_bucket(bucket)
+
+    local_directory_path = f'/home/workdir/yellow_tripdata_{current_year}-{current_month}_transformed.parquet'
+
+    for root, dirs, files in os.walk(local_directory_path):
+        for file in files:
+            local_file_path = os.path.join(root, file)
+            object_name = os.path.relpath(local_file_path, local_directory_path)
+
+            # Upload the file to MinIO
+            client.fput_object(
+                bucket,
+                f"stg/yellow_tripdata_{current_year}-{current_month}_transformed.parquet/{object_name}",
+                local_file_path
+            )
+
+
+def get_lat_lon(sf, shp_dic, transformer):
+    content = []
+    for sr in sf.shapeRecords():
+        shape = sr.shape
+        rec = sr.record
+        loc_id = rec[shp_dic['LocationID']]
+
+        x = (shape.bbox[0] + shape.bbox[2]) / 2
+        y = (shape.bbox[1] + shape.bbox[3]) / 2
+        x, y = transformer.transform(x, y)
+
+        content.append((loc_id, x, y))
+
+        columns = ["LocationID", "longitude", "latitude"]
+    return spark.createDataFrame(content, columns)
+
+
+def create_location_file():
+    # Define the source and target CRS
+    source_crs = pyproj.Proj(
+        init='epsg:3628')  # Replace 'YOUR_SOURCE_EPSG' with the EPSG code of your source CRS
+    target_crs = pyproj.Proj(init='epsg:4326')  # EPSG 4326 is WGS 84, commonly used for latitude and longitude
+
+    # Create a transformation function
+    transformer = pyproj.Transformer.from_proj(source_crs, target_crs)
     sf = shapefile.Reader('/home/workdir/taxi_zones/taxi_zones.shp')
 
     fields_name = [field[0] for field in sf.fields[1:]]
     shp_dic = dict(zip(fields_name, list(range(len(fields_name)))))
-
     attributes = sf.records()
-
     shp_attr = [dict(zip(fields_name, attr)) for attr in attributes]
 
     attribute_df = spark.createDataFrame(shp_attr)
-    attribute_df.show()
 
-    def get_lat_lon(sf):
-        content = []
-        for sr in sf.shapeRecords():
-            shape = sr.shape
-            rec = sr.record
-            loc_id = rec[shp_dic['LocationID']]
-
-            x = (shape.bbox[0] + shape.bbox[2]) / 2
-            y = (shape.bbox[1] + shape.bbox[3]) / 2
-
-            content.append((loc_id, x, y))
-
-            columns = ["LocationID", "longtitude", "lattitude"]
-        return spark.createDataFrame(content, columns)
-
-    long_lat = get_lat_lon(sf)
+    long_lat = get_lat_lon(sf, shp_dic, transformer)
     loc_df = attribute_df.join(long_lat, on="LocationID").sort("LocationID")
-
+    # logging.info(loc_df.printSchema())
+    # logging.info(long_lat.head())
     loc_df.toPandas().to_csv("/home/workdir/location.csv", index=False)
 
 
 def load_parquet_to_db():
     df = spark.read\
-        .option("header", "true")\
+        .option("header", "true") \
+        .option("inferSchema", "true")\
         .parquet(f'/home/workdir/yellow_tripdata_{current_year}-{current_month}_transformed.parquet')
 
     # logging.info(df.show(5))
@@ -269,7 +311,6 @@ upload_shapefile_to_minio = PythonOperator(
 transform_data = PythonOperator(
     task_id="transform_data",
     python_callable=transform,
-    provide_context=True,
     dag=dag
 )
 
@@ -292,12 +333,7 @@ upload_location_file_to_minio = PythonOperator(
 
 upload_transformed_file_to_minio = PythonOperator(
     task_id="upload_transformed_file_to_minio",
-    python_callable=load_file_to_minio,
-    op_kwargs={
-        "path": "/home/workdir/",
-        "file_name": f'yellow_tripdata_{current_year}-{current_month}_transformed.parquet',
-        "key_prefix": "stg/"
-    },
+    python_callable=load_transform_data_to_minio,
     dag=dag
 )
 
