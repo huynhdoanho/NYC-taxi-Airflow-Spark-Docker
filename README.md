@@ -43,3 +43,5 @@ docker compose up -d
 ```
 docker compose down
 ```
+# Example dashboard
+![alt text](https://github.com/huynhdoanho/NYC-taxi-Airflow-Spark-Docker/blob/8155ab405139db559083a1dcac32379cc4cc3f5f/imgs/dashboard.png)
